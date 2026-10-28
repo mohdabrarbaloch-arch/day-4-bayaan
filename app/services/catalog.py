@@ -1,12 +1,11 @@
 """The model registry.
 
 These are real open-weight models with real metadata — parameter counts, context
-windows and licence names are the published figures, not placeholders. If you add
-a model, add its true context window; a wrong number here makes the budget meter
-lie, which is worse than not having one.
+windows and licenses come from each publisher's model card. `ollama_tag` is the
+name you would `ollama pull` to run it locally. Nothing here invents a model.
 """
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 
 @dataclass(frozen=True)
@@ -19,14 +18,14 @@ class ModelSpec:
     license: str
     notes: str
     ollama_tag: str
-    template: str
-    stop_sequences: tuple[str, ...] = field(default_factory=tuple)
-    # Rough per-1M-token prices for hosted inference. Local runs cost 0.
-    price_in: float = 0.0
-    price_out: float = 0.0
+    # Families whose chat template we know how to render.
+    chat_template: str
+    # Suggested sampling defaults from the model card, where one is documented.
+    default_temperature: float = 0.7
+    default_top_p: float = 0.95
 
 
-CATALOG: tuple[ModelSpec, ...] = (
+MODELS: tuple[ModelSpec, ...] = (
     ModelSpec(
         id="llama-3.3-70b-instruct",
         label="Llama 3.3 70B Instruct",
@@ -35,14 +34,13 @@ CATALOG: tuple[ModelSpec, ...] = (
         context_window=131072,
         license="Llama 3.3 Community License",
         notes=(
-            "Meta's 70B, tuned to behave like the larger 405B. The strongest general "
-            "open model most people can actually host. Needs ~40GB at 4-bit."
+            "Meta's strongest open instruct model. On most benchmarks it lands close to "
+            "the much larger Llama 3.1 405B, which makes it the practical default for a "
+            "serious local setup if you have the VRAM."
         ),
         ollama_tag="llama3.3:70b",
-        template="llama3",
-        stop_sequences=("<|eot_id|>", "<|end_of_text|>"),
-        price_in=0.59,
-        price_out=0.79,
+        chat_template="llama3",
+        default_temperature=0.6,
     ),
     ModelSpec(
         id="llama-3.1-8b-instruct",
@@ -52,14 +50,26 @@ CATALOG: tuple[ModelSpec, ...] = (
         context_window=131072,
         license="Llama 3.1 Community License",
         notes=(
-            "The default workhorse. Runs on a single 8GB GPU at 4-bit and handles "
-            "most drafting, extraction and classification work."
+            "The workhorse. Runs on a single consumer GPU and handles most instruction "
+            "following well. This is the model to start with if you're new to self-hosting."
         ),
         ollama_tag="llama3.1:8b",
-        template="llama3",
-        stop_sequences=("<|eot_id|>", "<|end_of_text|>"),
-        price_in=0.05,
-        price_out=0.08,
+        chat_template="llama3",
+        default_temperature=0.6,
+    ),
+    ModelSpec(
+        id="llama-3.2-3b-instruct",
+        label="Llama 3.2 3B Instruct",
+        family="Llama",
+        params="3B",
+        context_window=131072,
+        license="Llama 3.2 Community License",
+        notes=(
+            "Small enough to run on a laptop CPU, though you'll feel it on anything "
+            "requiring multi-step reasoning. Good for classification and short rewrites."
+        ),
+        ollama_tag="llama3.2:3b",
+        chat_template="llama3",
     ),
     ModelSpec(
         id="mistral-7b-instruct",
@@ -69,146 +79,112 @@ CATALOG: tuple[ModelSpec, ...] = (
         context_window=32768,
         license="Apache 2.0",
         notes=(
-            "Apache 2.0, so no licence negotiation. Fast, terse, good at instruction "
-            "following. The safest choice for commercial use."
+            "Truly permissive licensing — no acceptable-use rider, no monthly active user "
+            "cap. If you're shipping commercially and want to avoid license review, this "
+            "and Qwen are the two to look at first."
         ),
         ollama_tag="mistral:7b",
-        template="mistral",
-        stop_sequences=("</s>",),
-        price_in=0.03,
-        price_out=0.06,
+        chat_template="mistral",
     ),
     ModelSpec(
         id="mixtral-8x7b-instruct",
         label="Mixtral 8x7B Instruct",
         family="Mistral",
-        params="8x7B (MoE)",
+        params="46.7B total / 12.9B active",
         context_window=32768,
         license="Apache 2.0",
         notes=(
-            "Mixture-of-experts: 47B total parameters but only ~13B active per token, "
-            "so it runs near 13B speed. Strong multilingual."
+            "A mixture-of-experts model: 8 experts, 2 active per token. Costs roughly like "
+            "a 13B model to run but reasons closer to a 46B. Needs ~26GB in 4-bit."
         ),
         ollama_tag="mixtral:8x7b",
-        template="mistral",
-        stop_sequences=("</s>",),
-        price_in=0.24,
-        price_out=0.24,
+        chat_template="mistral",
     ),
     ModelSpec(
         id="qwen2.5-72b-instruct",
-        label="Qwen 2.5 72B Instruct",
+        label="Qwen2.5 72B Instruct",
         family="Qwen",
         params="72B",
         context_window=131072,
-        license="Qwen License",
+        license="Apache 2.0",
         notes=(
-            "Alibaba's flagship. Notably strong on maths and code, and the best of "
-            "this set for non-English work."
+            "Strong multilingual coverage — noticeably better than the Llama family on "
+            "Urdu, Arabic and Chinese. Apache 2.0 makes it easy to justify commercially."
         ),
         ollama_tag="qwen2.5:72b",
-        template="chatml",
-        stop_sequences=("<|im_end|>",),
-        price_in=0.35,
-        price_out=0.40,
+        chat_template="chatml",
     ),
     ModelSpec(
-        id="qwen2.5-7b-instruct",
-        label="Qwen 2.5 7B Instruct",
+        id="qwen2.5-coder-32b-instruct",
+        label="Qwen2.5 Coder 32B Instruct",
         family="Qwen",
-        params="7B",
-        context_window=131072,
-        license="Qwen License",
+        params="32B",
+        context_window=32768,
+        license="Apache 2.0",
         notes=(
-            "The small Qwen. Punches above its weight on structured output and "
-            "multilingual tasks; fits in 6GB at 4-bit."
+            "Tuned for code. Comfortably the best open model at this size for filling in "
+            "functions and reading unfamiliar codebases, and it fits in 24GB at 4-bit."
         ),
-        ollama_tag="qwen2.5:7b",
-        template="chatml",
-        stop_sequences=("<|im_end|>",),
-        price_in=0.05,
-        price_out=0.10,
+        ollama_tag="qwen2.5-coder:32b",
+        chat_template="chatml",
+        default_temperature=0.2,
     ),
     ModelSpec(
         id="gemma-2-9b-it",
-        label="Gemma 2 9B IT",
+        label="Gemma 2 9B Instruct",
         family="Gemma",
         params="9B",
         context_window=8192,
         license="Gemma Terms of Use",
         notes=(
-            "Google's open release. Small context window (8k) — watch the budget "
-            "meter, it fills faster than you expect."
+            "Google's open release. Punchy for its size, but the 8k context is the "
+            "smallest here and the license carries Google's usage restrictions."
         ),
         ollama_tag="gemma2:9b",
-        template="gemma",
-        stop_sequences=("<end_of_turn>",),
-        price_in=0.03,
-        price_out=0.06,
+        chat_template="gemma",
+        default_temperature=1.0,
     ),
     ModelSpec(
-        id="phi-3.5-mini-instruct",
-        label="Phi-3.5 Mini Instruct",
+        id="phi-4-14b",
+        label="Phi-4 14B",
         family="Phi",
-        params="3.8B",
+        params="14B",
+        context_window=16384,
+        license="MIT",
+        notes=(
+            "Microsoft's small model trained heavily on synthetic textbook data. Strong on "
+            "math and structured reasoning for its size; weaker on open-ended chat."
+        ),
+        ollama_tag="phi4:14b",
+        chat_template="phi",
+        default_temperature=0.3,
+    ),
+    ModelSpec(
+        id="deepseek-r1-distill-32b",
+        label="DeepSeek-R1 Distill Qwen 32B",
+        family="DeepSeek",
+        params="32B",
         context_window=131072,
         license="MIT",
         notes=(
-            "MIT licensed and tiny. Trained heavily on synthetic textbook data, so it "
-            "reasons well for its size but knows less trivia."
+            "A reasoning model distilled into Qwen 32B. Writes long chains of thought "
+            "before answering, so it's slow and token-hungry — but it's the best open "
+            "option for problems that need actual working out."
         ),
-        ollama_tag="phi3.5:mini",
-        template="chatml",
-        stop_sequences=("<|end|>",),
-        price_in=0.01,
-        price_out=0.02,
-    ),
-    ModelSpec(
-        id="deepseek-v2-lite",
-        label="DeepSeek V2 Lite Chat",
-        family="DeepSeek",
-        params="16B (MoE)",
-        context_window=65536,
-        license="DeepSeek License",
-        notes=(
-            "16B total, 2.4B active. Extremely cheap to run for its quality — the "
-            "value pick if you're paying per token."
-        ),
-        ollama_tag="deepseek-v2:16b",
-        template="deepseek",
-        stop_sequences=("<|EOT|>",),
-        price_in=0.14,
-        price_out=0.28,
-    ),
-    ModelSpec(
-        id="command-r",
-        label="Command R",
-        family="Cohere",
-        params="35B",
-        context_window=131072,
-        license="CC-BY-NC 4.0",
-        notes=(
-            "Built for RAG: trained to cite sources and handle long retrieved "
-            "context. Non-commercial licence — check before shipping."
-        ),
-        ollama_tag="command-r:35b",
-        template="command",
-        stop_sequences=("<|END_OF_TURN_TOKEN|>",),
-        price_in=0.15,
-        price_out=0.60,
+        ollama_tag="deepseek-r1:32b",
+        chat_template="chatml",
+        default_temperature=0.6,
     ),
 )
 
-BY_ID: dict[str, ModelSpec] = {m.id: m for m in CATALOG}
+MODELS_BY_ID: dict[str, ModelSpec] = {m.id: m for m in MODELS}
+
+DEFAULT_MODEL_ID = "llama-3.1-8b-instruct"
 
 
-def get(model_id: str) -> ModelSpec | None:
-    return BY_ID.get(model_id)
+def get_model(model_id: str) -> ModelSpec | None:
+    return MODELS_BY_ID.get(model_id)
 
 
 def all_models() -> tuple[ModelSpec, ...]:
-    return CATALOG
-
-
-def default_model() -> ModelSpec:
-    return BY_ID["llama-3.1-8b-instruct"]
+    return MODELS
