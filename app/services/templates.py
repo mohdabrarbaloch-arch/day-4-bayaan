@@ -1,102 +1,109 @@
 """Chat template rendering.
 
-Every open model expects a different wrapping. Getting it wrong doesn't raise —
-the model just answers worse, and you spend the evening blaming the quantisation.
-So the templates live here, in one place, and the UI can show you the exact
-string before you send it.
+Every open model expects a different wrapping. Getting this wrong is one of the
+most common reasons a self-hosted model "seems dumb" — it's not dumb, it's been
+handed a prompt it can't parse. Bayaan renders the template so you can see
+exactly what string would be sent.
+
+These follow each family's published template. A server may add its own default
+system prompt on top; where that's known it's noted in `template_note`.
 """
 
-from dataclasses import dataclass
+TEMPLATES = ("llama3", "mistral", "chatml", "gemma", "phi")
 
-from .catalog import ModelSpec
+TEMPLATE_LABELS = {
+    "llama3": "Llama 3 header format",
+    "mistral": "[INST] block",
+    "chatml": "ChatML",
+    "gemma": "Gemma turn format",
+    "phi": "Phi chat format",
+}
+
+TEMPLATE_NOTES = {
+    "llama3": (
+        "Uses <|start_header_id|> / <|end_header_id|> blocks. Llama 3.1+ injects a "
+        "default system prompt about being helpful unless you supply your own — so an "
+        "empty system prompt does not mean no system prompt."
+    ),
+    "mistral": (
+        "Mistral v0.3 puts the system message inside the first [INST] block, separated "
+        "by a blank line. There's no dedicated system role."
+    ),
+    "chatml": (
+        "Qwen and DeepSeek distills use ChatML: <|im_start|>role ... <|im_end|>. "
+        "Straightforward, and the easiest template to hand-write."
+    ),
+    "gemma": (
+        "Gemma has no system role at all — the system prompt is prepended to the first "
+        "user turn. Long system prompts therefore eat into the user message."
+    ),
+    "phi": ("Phi-4 uses <|system|>, <|user|>, <|assistant|> markers with <|end|> terminators."),
+}
 
 
-@dataclass(frozen=True)
-class Rendered:
-    text: str
-    template_name: str
-    note: str
-    stop_sequences: list[str]
+def _system_or_default(system_prompt: str) -> str:
+    return system_prompt.strip() if system_prompt.strip() else "You are a helpful assistant."
 
 
-def _llama3(system: str, user: str) -> str:
-    # Llama 3.x uses header blocks. The system block is optional in the spec but
-    # most servers expect it present, so we always emit it.
+def render_llama3(system_prompt: str, user_prompt: str) -> str:
+    system = _system_or_default(system_prompt)
     return (
         "<|begin_of_text|>"
         "<|start_header_id|>system<|end_header_id|>\n\n"
         f"{system}<|eot_id|>"
         "<|start_header_id|>user<|end_header_id|>\n\n"
-        f"{user}<|eot_id|>"
+        f"{user_prompt}<|eot_id|>"
         "<|start_header_id|>assistant<|end_header_id|>\n\n"
     )
 
 
-def _mistral(system: str, user: str) -> str:
-    # Mistral folds the system prompt into the first user turn — there is no
-    # separate system role in the v0.3 template.
-    merged = f"{system}\n\n{user}" if system else user
-    return f"<s>[INST] {merged} [/INST]"
+def render_mistral(system_prompt: str, user_prompt: str) -> str:
+    system = system_prompt.strip()
+    body = f"{system}\n\n{user_prompt}" if system else user_prompt
+    return f"<s>[INST] {body} [/INST]"
 
 
-def _chatml(system: str, user: str) -> str:
-    parts = []
-    if system:
-        parts.append(f"<|im_start|>system\n{system}<|im_end|>\n")
-    parts.append(f"<|im_start|>user\n{user}<|im_end|>\n")
-    parts.append("<|im_start|>assistant\n")
-    return "".join(parts)
-
-
-def _gemma(system: str, user: str) -> str:
-    # Gemma 2 has no system role; the instruction is prepended to the user turn.
-    merged = f"{system}\n\n{user}" if system else user
-    return f"<start_of_turn>user\n{merged}<end_of_turn>\n<start_of_turn>model\n"
-
-
-def _deepseek(system: str, user: str) -> str:
-    parts = []
-    if system:
-        parts.append(f"{system}\n\n")
-    parts.append(f"User: {user}\n\nAssistant: ")
-    return "".join(parts)
-
-
-def _command(system: str, user: str) -> str:
+def render_chatml(system_prompt: str, user_prompt: str) -> str:
+    system = _system_or_default(system_prompt)
     return (
-        "<|START_OF_TURN_TOKEN|><|SYSTEM_TOKEN|>"
-        f"{system}<|END_OF_TURN_TOKEN|>"
-        "<|START_OF_TURN_TOKEN|><|USER_TOKEN|>"
-        f"{user}<|END_OF_TURN_TOKEN|>"
-        "<|START_OF_TURN_TOKEN|><|CHATBOT_TOKEN|>"
+        f"<|im_start|>system\n{system}<|im_end|>\n"
+        f"<|im_start|>user\n{user_prompt}<|im_end|>\n"
+        "<|im_start|>assistant\n"
     )
+
+
+def render_gemma(system_prompt: str, user_prompt: str) -> str:
+    system = system_prompt.strip()
+    body = f"{system}\n\n{user_prompt}" if system else user_prompt
+    return f"<start_of_turn>user\n{body}<end_of_turn>\n<start_of_turn>model\n"
+
+
+def render_phi(system_prompt: str, user_prompt: str) -> str:
+    system = _system_or_default(system_prompt)
+    return f"<|system|>\n{system}<|end|>\n" f"<|user|>\n{user_prompt}<|end|>\n" "<|assistant|>\n"
 
 
 _RENDERERS = {
-    "llama3": (_llama3, "Llama 3.x", "Header blocks terminated by <|eot_id|>."),
-    "mistral": (_mistral, "Mistral [INST]", "System prompt is folded into the user turn."),
-    "chatml": (_chatml, "ChatML", "Qwen / Phi style <|im_start|> blocks."),
-    "gemma": (_gemma, "Gemma turns", "No system role — instruction is prepended."),
-    "deepseek": (_deepseek, "DeepSeek plain", "Plain User/Assistant turns."),
-    "command": (_command, "Command R", "Cohere's token-block format."),
+    "llama3": render_llama3,
+    "mistral": render_mistral,
+    "chatml": render_chatml,
+    "gemma": render_gemma,
+    "phi": render_phi,
 }
 
 
-def render(model: ModelSpec, system_prompt: str, user_prompt: str) -> Rendered:
-    """Render a prompt through the model's template."""
-    renderer, name, note = _RENDERERS.get(model.template, _RENDERERS["chatml"])
-    return Rendered(
-        text=renderer(system_prompt.strip(), user_prompt.strip()),
-        template_name=name,
-        note=note,
-        stop_sequences=list(model.stop_sequences),
-    )
+def render(template: str, system_prompt: str, user_prompt: str) -> str:
+    """Render `template` with the given prompts. Unknown templates fall back to ChatML."""
+    renderer = _RENDERERS.get(template, render_chatml)
+    return renderer(system_prompt, user_prompt)
 
 
-def template_for(model: ModelSpec) -> Rendered:
-    """The template with placeholder text, for the inspector dialog."""
-    return render(
-        model,
-        "{system_prompt}",
-        "{user_prompt}",
-    )
+def stops_for(template: str) -> list[str]:
+    """Stop sequences that end a turn for this template."""
+    return {
+        "llama3": ["<|eot_id|>", "<|end_of_text|>"],
+        "mistral": ["</s>"],
+        "chatml": ["<|im_end|>"],
+        "gemma": ["<end_of_turn>"],
+        "phi": ["<|end|>"],
+    }.get(template, ["<|im_end|>"])
